@@ -1,9 +1,15 @@
-// Reads CPU, memory and battery numbers from /proc and /sys.
-// Only depends on GLib so it can be tested with `gjs -m` outside GNOME Shell.
+// Reads CPU, GPU, memory and battery numbers from /proc and /sys.
+// Only depends on GLib/Gio so it can be tested with `gjs -m` outside GNOME Shell.
+//
+// Every periodic read is asynchronous. Battery and charge-limit files are
+// answered by the laptop's embedded controller, which can take seconds to
+// reply; a synchronous read would freeze GNOME Shell for that long.
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 const decoder = new TextDecoder();
 
+// Synchronous read, only for the one-time hardware discovery below.
 function readText(path) {
     if (!path)
         return null;
@@ -15,13 +21,29 @@ function readText(path) {
     }
 }
 
-function readNumber(path) {
-    const text = readText(path);
+function readTextAsync(path) {
+    if (!path)
+        return Promise.resolve(null);
+    return new Promise(resolve => {
+        Gio.File.new_for_path(path).load_contents_async(null, (file, result) => {
+            try {
+                const [, bytes] = file.load_contents_finish(result);
+                resolve(decoder.decode(bytes).trim());
+            } catch {
+                resolve(null);
+            }
+        });
+    });
+}
+
+function toNumber(text) {
     if (text === null || text === '')
         return null;
     const n = Number(text);
     return Number.isFinite(n) ? n : null;
 }
+
+const readNumberAsync = async path => toNumber(await readTextAsync(path));
 
 function listDir(path) {
     try {
@@ -76,63 +98,80 @@ function findConservationMode() {
     return null;
 }
 
-function parseMeminfo() {
-    const info = {};
-    for (const line of (readText('/proc/meminfo') ?? '').split('\n')) {
-        const m = line.match(/^(\w+):\s+(\d+)/);
-        if (m)
-            info[m[1]] = Number(m[2]) * 1024;
-    }
-    return info;
-}
-
 export class Stats {
     constructor() {
         this.batteryPath = findPowerSupply('Battery');
         this.acPath = findPowerSupply('Mains');
         this.conservationPath = findConservationMode();
+        this.threads = GLib.get_num_processors();
         this._cpuTempPath = findCpuTemp();
         this._gpu = findGpu();
-        this._cpuCount = GLib.get_num_processors();
         this._prevCpu = null;
         this._onBatterySince = null;
     }
 
-    sample() {
-        return {
-            cpu: this._sampleCpu(),
-            gpu: this._sampleGpu(),
-            memory: this._sampleMemory(),
-            battery: this._sampleBattery(),
-            chargeLimit: this.conservationPath ? readNumber(this.conservationPath) === 1 : null,
-        };
+    async sample() {
+        const [cpu, gpu, memory, battery, chargeLimit] = await Promise.all([
+            this._sampleCpu(),
+            this._sampleGpu(),
+            this._sampleMemory(),
+            this._sampleBattery(),
+            this._sampleChargeLimit(),
+        ]);
+        return {cpu, gpu, memory, battery, chargeLimit};
+    }
+
+    async _sampleChargeLimit() {
+        if (!this.conservationPath)
+            return null;
+        const value = await readNumberAsync(this.conservationPath);
+        return value === null ? null : value === 1;
     }
 
     // An APU has a small fixed VRAM carve-out plus GTT, system RAM the GPU
     // borrows on demand; together they are what the GPU can use.
-    _sampleGpu() {
+    async _sampleGpu() {
         if (!this._gpu)
             return null;
         const {device, hwmon} = this._gpu;
-        const sensor = (file, scale) => {
-            const n = hwmon ? readNumber(`${hwmon}/${file}`) : null;
+        const sensor = async (file, scale) => {
+            const n = hwmon ? await readNumberAsync(`${hwmon}/${file}`) : null;
             return n !== null ? n / scale : null;
         };
+        const [busy, vramUsed, vramTotal, gttUsed, gttTotal, tempC, mhz, watts] = await Promise.all([
+            readNumberAsync(`${device}/gpu_busy_percent`),
+            readNumberAsync(`${device}/mem_info_vram_used`),
+            readNumberAsync(`${device}/mem_info_vram_total`),
+            readNumberAsync(`${device}/mem_info_gtt_used`),
+            readNumberAsync(`${device}/mem_info_gtt_total`),
+            sensor('temp1_input', 1000),
+            sensor('freq1_input', 1e6),
+            sensor('power1_average', 1e6),
+        ]);
         return {
-            busy: readNumber(`${device}/gpu_busy_percent`),
-            vramUsed: readNumber(`${device}/mem_info_vram_used`) ?? 0,
-            vramTotal: readNumber(`${device}/mem_info_vram_total`) ?? 0,
-            gttUsed: readNumber(`${device}/mem_info_gtt_used`) ?? 0,
-            gttTotal: readNumber(`${device}/mem_info_gtt_total`) ?? 0,
-            tempC: sensor('temp1_input', 1000),
-            mhz: sensor('freq1_input', 1e6),
-            watts: sensor('power1_average', 1e6),
+            busy,
+            vramUsed: vramUsed ?? 0,
+            vramTotal: vramTotal ?? 0,
+            gttUsed: gttUsed ?? 0,
+            gttTotal: gttTotal ?? 0,
+            tempC,
+            mhz,
+            watts,
         };
     }
 
-    _sampleCpu() {
+    async _sampleCpu() {
+        const freqFiles = Array.from({length: this.threads},
+            (_, i) => `/sys/devices/system/cpu/cpu${i}/cpufreq/scaling_cur_freq`);
+        const [stat, loadavg, temp, ...freqs] = await Promise.all([
+            readTextAsync('/proc/stat'),
+            readTextAsync('/proc/loadavg'),
+            readNumberAsync(this._cpuTempPath),
+            ...freqFiles.map(readNumberAsync),
+        ]);
+
         // Line 0 is the all-CPU total, then one line per thread (cpu0, cpu1, ...).
-        const times = (readText('/proc/stat') ?? '').split('\n')
+        const times = (stat ?? '').split('\n')
             .filter(line => line.startsWith('cpu'))
             .map(line => {
                 const fields = line.split(/\s+/).slice(1, 9).map(Number);
@@ -146,28 +185,24 @@ export class Stats {
         });
         this._prevCpu = times;
 
-        let freqSum = 0, freqCount = 0;
-        for (let i = 0; i < this._cpuCount; i++) {
-            const khz = readNumber(`/sys/devices/system/cpu/cpu${i}/cpufreq/scaling_cur_freq`);
-            if (khz !== null) {
-                freqSum += khz;
-                freqCount++;
-            }
-        }
-
-        const temp = readNumber(this._cpuTempPath);
+        const khz = freqs.filter(f => f !== null);
         return {
             usage: usage[0] ?? null,
             cores: usage.slice(1),
-            threads: this._cpuCount,
-            load: (readText('/proc/loadavg') ?? '').split(' ').slice(0, 3).map(Number),
-            ghz: freqCount ? freqSum / freqCount / 1e6 : null,
+            threads: this.threads,
+            load: (loadavg ?? '').split(' ').slice(0, 3).map(Number),
+            ghz: khz.length ? khz.reduce((a, b) => a + b, 0) / khz.length / 1e6 : null,
             tempC: temp !== null ? temp / 1000 : null,
         };
     }
 
-    _sampleMemory() {
-        const m = parseMeminfo();
+    async _sampleMemory() {
+        const m = {};
+        for (const line of (await readTextAsync('/proc/meminfo') ?? '').split('\n')) {
+            const match = line.match(/^(\w+):\s+(\d+)/);
+            if (match)
+                m[match[1]] = Number(match[2]) * 1024;
+        }
         return {
             total: m.MemTotal ?? 0,
             used: (m.MemTotal ?? 0) - (m.MemAvailable ?? 0),
@@ -178,29 +213,36 @@ export class Stats {
 
     // Energy in Wh and power in W; falls back to charge * voltage on batteries
     // that only report charge_* / current_now.
-    _sampleBattery() {
+    async _sampleBattery() {
         const bat = this.batteryPath;
         if (!bat)
             return null;
 
-        const volts = (readNumber(`${bat}/voltage_now`) ?? 0) / 1e6;
+        const keys = ['voltage_now', 'power_now', 'current_now', 'capacity', 'cycle_count',
+            'energy_now', 'energy_full', 'energy_full_design',
+            'charge_now', 'charge_full', 'charge_full_design'];
+        const [status, online, ...values] = await Promise.all([
+            readTextAsync(`${bat}/status`),
+            this.acPath ? readNumberAsync(`${this.acPath}/online`) : null,
+            ...keys.map(k => readNumberAsync(`${bat}/${k}`)),
+        ]);
+        const v = Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+
+        const volts = (v.voltage_now ?? 0) / 1e6;
         const energy = key => {
-            const e = readNumber(`${bat}/energy_${key}`);
-            if (e !== null)
-                return e / 1e6;
-            const c = readNumber(`${bat}/charge_${key}`);
+            if (v[`energy_${key}`] !== null)
+                return v[`energy_${key}`] / 1e6;
+            const c = v[`charge_${key}`];
             return c !== null ? c / 1e6 * volts : null;
         };
-        let watts = readNumber(`${bat}/power_now`);
-        if (watts !== null)
-            watts /= 1e6;
-        else
-            watts = (readNumber(`${bat}/current_now`) ?? 0) / 1e6 * volts;
+        const watts = v.power_now !== null
+            ? v.power_now / 1e6
+            : (v.current_now ?? 0) / 1e6 * volts;
 
-        const status = readText(`${bat}/status`) ?? 'Unknown';
-        const acOnline = this.acPath ? readNumber(`${this.acPath}/online`) === 1 : status !== 'Discharging';
+        const state = status ?? 'Unknown';
+        const acOnline = this.acPath ? online === 1 : state !== 'Discharging';
         const now = energy('now');
-        const capacity = readNumber(`${bat}/capacity`);
+        const capacity = v.capacity;
 
         // Track how much has been used since the laptop went on battery.
         if (!acOnline && !this._onBatterySince)
@@ -220,14 +262,14 @@ export class Stats {
         }
 
         return {
-            status,
+            status: state,
             acOnline,
             capacity,
             watts,
             energyNow: now,
             energyFull: energy('full'),
             energyDesign: energy('full_design'),
-            cycles: readNumber(`${bat}/cycle_count`),
+            cycles: v.cycle_count,
             drained,
         };
     }

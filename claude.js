@@ -60,10 +60,18 @@ export class ClaudeUsage {
         return this.limits?.find(l => l.kind === 'weekly_all') ?? null;
     }
 
-    _readToken() {
+    async _readToken() {
+        const bytes = await new Promise(resolve => {
+            Gio.File.new_for_path(CREDENTIALS).load_contents_async(this._cancellable, (file, result) => {
+                try {
+                    resolve(file.load_contents_finish(result)[1]);
+                } catch {
+                    resolve(null);
+                }
+            });
+        });
         let oauth;
         try {
-            const [, bytes] = GLib.file_get_contents(CREDENTIALS);
             oauth = JSON.parse(decoder.decode(bytes)).claudeAiOauth;
         } catch {
             oauth = null;
@@ -90,7 +98,7 @@ export class ClaudeUsage {
     async refresh() {
         try {
             const msg = Soup.Message.new('GET', USAGE_URL);
-            msg.request_headers.append('Authorization', `Bearer ${this._readToken()}`);
+            msg.request_headers.append('Authorization', `Bearer ${await this._readToken()}`);
             msg.request_headers.append('anthropic-beta', 'oauth-2025-04-20');
             const bytes = await this._send(msg);
             const status = msg.get_status();

@@ -929,7 +929,7 @@ export class LaptopMonitor {
 
         // CPU threads, then the activity graph, under the gauges.
         this._threadStats = label('', 'lm-group-note', {y_align: Clutter.ActorAlign.CENTER});
-        overview.add_child(this._subheader(`CPU THREADS (${this._stats.sample().cpu.threads})`, this._threadStats));
+        overview.add_child(this._subheader(`CPU THREADS (${this._stats.threads})`, this._threadStats));
         this._cores = new CoreBars();
         overview.add_child(this._cores.actor);
 
@@ -1047,8 +1047,22 @@ export class LaptopMonitor {
             value.add_style_class_name(`lm-${lvl}`);
     }
 
-    _update() {
-        const {cpu, gpu, memory, battery, chargeLimit} = this._stats.sample();
+    // Reads run asynchronously, so a slow file (the battery, on some laptops)
+    // never blocks the shell. If the previous read is still going, skip a tick.
+    async _update() {
+        if (this._updating)
+            return;
+        this._updating = true;
+        let sample;
+        try {
+            sample = await this._stats.sample();
+        } finally {
+            this._updating = false;
+        }
+        if (this._destroyed)
+            return;
+        const {cpu, gpu, memory, battery, chargeLimit} = sample;
+        const available = JSON.stringify(this._available);
 
         pushHistory(this._history.cpu, cpu.usage);
         const usage = cpu.usage !== null ? `${Math.round(cpu.usage)}%` : '…';
@@ -1106,6 +1120,9 @@ export class LaptopMonitor {
 
         const details = [memory.swapTotal ? `swap ${fmtGB(memory.swapUsed)} GB` : null, ...this._batteryBrief ?? []];
         this._detailsSummary.text = details.filter(Boolean).join(' · ');
+
+        if (JSON.stringify(this._available) !== available)
+            this._syncPanelItems();
 
         this._spark.queue_repaint();
         if (this._button.menu.isOpen) {
@@ -1273,22 +1290,45 @@ export class LaptopMonitor {
     _setChargeLimit(enabled) {
         const file = Gio.File.new_for_path(this._stats.conservationPath);
         this._writing = true;
-        // sysfs needs an in-place write; replace_contents() would write a temp
-        // file and rename it over the attribute.
-        file.open_readwrite_async(GLib.PRIORITY_DEFAULT, null, (f, result) => {
-            try {
-                const stream = f.open_readwrite_finish(result);
-                stream.get_output_stream().write_all(new TextEncoder().encode(enabled ? '1' : '0'), null);
-                stream.close(null);
-            } catch (e) {
-                const denied = e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.PERMISSION_DENIED);
+        const done = error => {
+            if (error) {
+                const denied = error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.PERMISSION_DENIED);
                 Main.notifyError('Could not change the battery charge limit', denied
                     ? 'The setting is only writable by root. See "Charge limit permissions" on the extension\'s GitHub page.'
-                    : e.message);
+                    : error.message);
             }
             this._writing = false;
             if (!this._destroyed)
                 this._update();
+        };
+        // sysfs needs an in-place write; replace_contents() would write a temp
+        // file and rename it over the attribute. Every step is asynchronous
+        // because the embedded controller behind this file can be slow.
+        file.open_readwrite_async(GLib.PRIORITY_DEFAULT, null, (f, opened) => {
+            let stream;
+            try {
+                stream = f.open_readwrite_finish(opened);
+            } catch (e) {
+                done(e);
+                return;
+            }
+            const bytes = new GLib.Bytes(new TextEncoder().encode(enabled ? '1' : '0'));
+            stream.get_output_stream().write_bytes_async(bytes, GLib.PRIORITY_DEFAULT, null, (out, written) => {
+                let error = null;
+                try {
+                    out.write_bytes_finish(written);
+                } catch (e) {
+                    error = e;
+                }
+                stream.close_async(GLib.PRIORITY_DEFAULT, null, (s, closed) => {
+                    try {
+                        s.close_finish(closed);
+                    } catch (e) {
+                        error ??= e;
+                    }
+                    done(error);
+                });
+            });
         });
     }
 
