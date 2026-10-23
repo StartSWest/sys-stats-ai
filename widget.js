@@ -67,10 +67,10 @@ function fmtReset(ms) {
         return '';
     const minutes = (ms - Date.now()) / 60000;
     if (minutes <= 0)
-        return 'Resetting now';
+        return 'resetting now';
     const at = GLib.DateTime.new_from_unix_local(Math.floor(ms / 1000));
     const when = at.format(minutes < 1440 ? '%H:%M' : '%a %H:%M');
-    return `Resets in ${fmtDuration(minutes)} · ${when}`;
+    return `resets in ${fmtDuration(minutes)} · ${when}`;
 }
 
 function batteryIconName(bat) {
@@ -572,22 +572,22 @@ class MiniBar {
     }
 }
 
-// Title, percentage and a horizontal bar for one Claude plan limit.
+// Title, reset time and percentage on one line, bar below, for one Claude plan limit.
 class UsageBar {
     constructor(title) {
         this._fraction = 0;
         this._level = 'ok';
         this.actor = vbox('lm-usage', {x_expand: true});
         const header = new St.BoxLayout({x_expand: true});
-        header.add_child(label(title, 'lm-usage-title', {x_expand: true}));
-        this._percent = label('', 'lm-usage-percent');
+        header.add_child(label(title, 'lm-usage-title', {x_expand: true, y_align: Clutter.ActorAlign.CENTER}));
+        this._reset = label('', 'lm-usage-reset', {y_align: Clutter.ActorAlign.CENTER});
+        header.add_child(this._reset);
+        this._percent = label('', 'lm-usage-percent', {y_align: Clutter.ActorAlign.CENTER});
         header.add_child(this._percent);
         this.actor.add_child(header);
         this._bar = new St.DrawingArea({style_class: 'lm-bar', x_expand: true});
         this._bar.connect('repaint', a => this._draw(a));
         this.actor.add_child(this._bar);
-        this._reset = label('', 'lm-usage-reset');
-        this.actor.add_child(this._reset);
     }
 
     set(percent, resetText) {
@@ -819,7 +819,7 @@ export class LaptopMonitor {
             gpuMemory: new Gauge('GPU RAM', 'gpu', {warn: 80, crit: 92}),
             battery: new Gauge('Battery', 'battery', {warn: 20, crit: 10, inverted: true}),
         };
-        const gaugeLayout = new Clutter.GridLayout({column_homogeneous: true, row_spacing: 6});
+        const gaugeLayout = new Clutter.GridLayout({column_homogeneous: true, row_spacing: 2});
         const gauges = new St.Widget({layout_manager: gaugeLayout, style_class: 'lm-gauges', x_expand: true});
         Object.values(this._gauges).forEach((g, i) => gaugeLayout.attach(g.actor, i % 3, Math.floor(i / 3), 1, 1));
         this._gauges.battery.actor.visible = this._available.battery;
@@ -1140,7 +1140,7 @@ export class LaptopMonitor {
         // Leave room for the top bar, the charge switch and the menu's margins.
         const monitor = Main.layoutManager.findMonitorForActor(this._button) ?? Main.layoutManager.primaryMonitor;
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitor.index);
-        this._scroll.style = `max-height: ${Math.max(240, workArea.height - 150)}px;`;
+        this._scroll.style = `max-height: ${Math.max(240, workArea.height - 120)}px;`;
 
         this._chart.actor.queue_repaint();
         this._cores.actor.queue_repaint();
