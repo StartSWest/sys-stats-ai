@@ -1,0 +1,11 @@
+[Unit]
+Description=Lenovo IdeaPad battery conservation mode (charge limit ~80%), toggleable by sudo group
+After=systemd-udev-settle.service multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for i in $(seq 30); do f=$(ls /sys/bus/platform/drivers/ideapad_acpi/*/conservation_mode 2>/dev/null | head -1); [ -n "$f" ] && echo 1 > "$f" && chgrp sudo "$f" && chmod 664 "$f" && exit 0; sleep 1; done; exit 1'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

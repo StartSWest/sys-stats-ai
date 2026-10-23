@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.laptop-monitor" path="/org/gnome/shell/extensions/laptop-monitor/">
+    <key name="panel-items" type="as">
+      <default>['cpu', 'gpu', 'memory', 'battery', 'claude']</default>
+      <summary>Items shown in the top bar</summary>
+      <description>Any of: cpu, gpu, memory, temperature, battery, claude.</description>
+    </key>
+    <key name="collapsed-groups" type="as">
+      <default>['details', 'topbar']</default>
+      <summary>Collapsed menu groups</summary>
+      <description>Any of: overview, claude, details, topbar.</description>
+    </key>
+  </schema>
+</schemalist>

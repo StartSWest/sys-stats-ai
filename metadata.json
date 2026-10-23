@@ -1,0 +1,8 @@
+{
+  "uuid": "laptop-monitor@ivanc.local",
+  "name": "Laptop Monitor",
+  "description": "CPU, RAM, temperature, battery and Claude plan usage in the top bar, with gauges, graphs and a switch for the Lenovo IdeaPad ~80% charge limit (conservation mode).",
+  "shell-version": ["48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.laptop-monitor",
+  "version": 1
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#2e3436" fill-rule="evenodd" d="M1.5 3.5h13a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-13A.5.5 0 0 1 1 11V4a.5.5 0 0 1 .5-.5zm1 1.5v5h11V5z"/>
+  <rect fill="#2e3436" x="3.5" y="6" width="2.5" height="3" rx="0.3"/>
+  <rect fill="#2e3436" x="6.75" y="6" width="2.5" height="3" rx="0.3"/>
+  <rect fill="#2e3436" x="10" y="6" width="2.5" height="3" rx="0.3"/>
+  <rect fill="#2e3436" x="2" y="12" width="1" height="2"/>
+  <rect fill="#2e3436" x="4" y="12" width="1" height="2"/>
+  <rect fill="#2e3436" x="6" y="12" width="1" height="2"/>
+  <rect fill="#2e3436" x="9" y="12" width="1" height="2"/>
+  <rect fill="#2e3436" x="11" y="12" width="1" height="2"/>
+  <rect fill="#2e3436" x="13" y="12" width="1" height="2"/>
+</svg>
