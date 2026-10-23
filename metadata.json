@@ -1,8 +1,8 @@
 {
-  "uuid": "laptop-monitor@ivanc.local",
-  "name": "Laptop Monitor",
-  "description": "CPU, RAM, temperature, battery and Claude plan usage in the top bar, with gauges, graphs and a switch for the Lenovo IdeaPad ~80% charge limit (conservation mode).",
+  "uuid": "sys-stats-ai@startswest.github.io",
+  "name": "Sys Stats AI",
+  "description": "System stats in the top bar with live gauges and graphs, plus your Claude plan usage limits.\n\nShows:\n- CPU usage, clock, per-thread load and temperature\n- GPU usage, clock, VRAM and shared memory (AMD)\n- Memory and swap\n- Battery level, power draw, time left and health\n- Claude plan usage (optional, off by default): your 5-hour session and weekly limits with reset times. Requires a Claude Code login on this computer; reads its saved login and contacts only api.anthropic.com.\n\nThe menu has gauges, a CPU thread view and a 3-minute graph in collapsible groups that show a one-line summary when collapsed. Choose which items appear in the top bar. On Lenovo IdeaPad laptops it also adds a switch to stop charging at about 80%.",
   "shell-version": ["48", "49", "50"],
-  "settings-schema": "org.gnome.shell.extensions.laptop-monitor",
-  "version": 1
+  "url": "https://github.com/StartSWest/sys-stats-ai",
+  "settings-schema": "org.gnome.shell.extensions.sys-stats-ai"
 }

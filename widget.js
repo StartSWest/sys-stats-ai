@@ -1,10 +1,9 @@
-// Top-bar indicator and popup for Laptop Monitor: icons in the panel, gauges,
-// graphs and detail tiles in the menu. extension.js imports this file again with
-// a fresh URL on every enable, so nothing here may call GObject.registerClass
-// (a GType name can only be registered once per session).
+// Top-bar indicator and popup for Sys Stats AI: icons in the panel, and gauges,
+// graphs, Claude plan usage and detail tiles in collapsible groups in the menu.
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
 import St from 'gi://St';
 import Cairo from 'cairo';
 
@@ -266,9 +265,11 @@ class Gauge {
 
     _draw(area) {
         paint(area, (cr, w, h, fg) => {
-            const r = Math.min(w, h) / 2 - 13;
+            // The dial is taller than wide; the arc sits at the top and the title
+            // gets the space below the arc ends.
+            const r = w / 2 - 13;
             const cx = w / 2;
-            const cy = h / 2 + 0.12 * r;
+            const cy = w / 2 + 0.12 * r;
             const angle = t => ARC_START + ARC_SWEEP * t;
             const at = (t, radius) => [cx + radius * Math.cos(angle(t)), cy + radius * Math.sin(angle(t))];
 
@@ -636,10 +637,10 @@ export class LaptopMonitor {
         });
         this._settingsId = this._settings.connect('changed::panel-items', () => this._syncPanelItems());
         this._groupsId = this._settings.connect('changed::collapsed-groups', () => this._syncGroups());
+        this._claudeId = this._settings.connect('changed::claude-enabled', () => this._syncClaudeEnabled());
 
         this._update();
-        this._syncPanelItems();
-        this._refreshClaude();
+        this._syncClaudeEnabled();
 
         this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, REFRESH_SECONDS, () => {
             this._update();
@@ -763,9 +764,48 @@ export class LaptopMonitor {
             const value = label('…', 'lm-chip-value', {y_align: Clutter.ActorAlign.CENTER});
             chip.add_child(value);
             box.add_child(chip);
-            this._claudeMini[kind] = {bar, value};
+            this._claudeMini[kind] = {chip, bar, value};
         }
+        this._claudeMiniOff = label('off', 'lm-chip-key', {y_align: Clutter.ActorAlign.CENTER});
+        box.add_child(this._claudeMiniOff);
         return box;
+    }
+
+    // Claude usage is opt-in: it reads Claude Code's login and contacts
+    // api.anthropic.com, so nothing happens until the user turns it on.
+    _buildClaudeOff() {
+        const box = vbox('lm-claude-off', {x_expand: true});
+        const text = label(
+            "Shows your Claude plan's 5-hour session and weekly usage limits with their reset times. " +
+            'Needs Claude Code signed in on this computer: it reads the saved login ' +
+            '(~/.claude/.credentials.json) and sends it only to api.anthropic.com, every 2 minutes.',
+            'lm-claude-off-text', {x_expand: true});
+        text.clutter_text.line_wrap = true;
+        text.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        box.add_child(text);
+        const button = new St.Button({label: 'Turn on Claude usage', style_class: 'lm-button', x_align: Clutter.ActorAlign.START});
+        button.connect('clicked', () => this._settings.set_boolean('claude-enabled', true));
+        box.add_child(button);
+        return box;
+    }
+
+    _syncClaudeEnabled() {
+        const enabled = this._settings.get_boolean('claude-enabled');
+        this._available.claude = enabled;
+        this._claudeOff.visible = !enabled;
+        this._claudeOn.visible = enabled;
+        Object.values(this._claudeMini).forEach(({chip}) => (chip.visible = enabled));
+        this._claudeMiniOff.visible = !enabled;
+        if (enabled) {
+            this._refreshClaude();
+        } else {
+            if (this._claudeTimerId)
+                GLib.source_remove(this._claudeTimerId);
+            this._claudeTimerId = 0;
+            this._claude.cancel();
+            this._claudeStatus.text = '';
+        }
+        this._syncPanelItems();
     }
 
     // Small title row inside a group, with optional content on the right.
@@ -855,8 +895,16 @@ export class LaptopMonitor {
         this._claudeStatus = label('', 'lm-group-note', {y_align: Clutter.ActorAlign.CENTER});
         this._claudeBox = vbox('lm-usage-list', {x_expand: true});
         this._claudeBars = new Map();
-        this._addGroup('claude', 'CLAUDE PLAN USAGE', {extra: this._claudeStatus, summary: this._buildClaudeSummary()})
-            .add_child(this._claudeBox);
+        const claude = this._addGroup('claude', 'CLAUDE PLAN USAGE',
+            {extra: this._claudeStatus, summary: this._buildClaudeSummary()});
+        this._claudeOff = this._buildClaudeOff();
+        claude.add_child(this._claudeOff);
+        this._claudeOn = vbox('lm-claude-on', {x_expand: true});
+        this._claudeOn.add_child(this._claudeBox);
+        const turnOff = new St.Button({label: 'Turn off', style_class: 'lm-link', x_align: Clutter.ActorAlign.END});
+        turnOff.connect('clicked', () => this._settings.set_boolean('claude-enabled', false));
+        this._claudeOn.add_child(turnOff);
+        claude.add_child(this._claudeOn);
 
         const layout = new Clutter.GridLayout({column_homogeneous: true, column_spacing: 6, row_spacing: 6});
         const grid = new St.Widget({layout_manager: layout, x_expand: true, style_class: 'lm-tiles'});
@@ -1002,7 +1050,8 @@ export class LaptopMonitor {
         if (this._button.menu.isOpen) {
             this._chart.actor.queue_repaint();
             this._cores.actor.queue_repaint();
-            this._updateClaude();
+            if (this._available.claude)
+                this._updateClaude();
         }
     }
 
@@ -1092,7 +1141,7 @@ export class LaptopMonitor {
             return GLib.SOURCE_REMOVE;
         });
         await this._claude.refresh();
-        if (!this._destroyed)
+        if (!this._destroyed && this._available.claude)
             this._updateClaude();
     }
 
@@ -1144,25 +1193,28 @@ export class LaptopMonitor {
 
         this._chart.actor.queue_repaint();
         this._cores.actor.queue_repaint();
+        if (!this._available.claude)
+            return;
         this._updateClaude();
         if (Date.now() - this._claude.updatedAt >= CLAUDE_REFRESH_SECONDS * 1000)
             this._refreshClaude();
     }
 
     _setChargeLimit(enabled) {
-        const path = this._stats.conservationPath;
+        const file = Gio.File.new_for_path(this._stats.conservationPath);
         this._writing = true;
-        // sysfs needs an in-place write; Gio/GLib replace helpers use a temp file + rename.
-        const proc = Gio.Subprocess.new(
-            ['/bin/sh', '-c', 'echo "$1" > "$2"', 'sh', enabled ? '1' : '0', path],
-            Gio.SubprocessFlags.STDERR_PIPE);
-        proc.communicate_utf8_async(null, null, (p, res) => {
+        // sysfs needs an in-place write; replace_contents() would write a temp
+        // file and rename it over the attribute.
+        file.open_readwrite_async(GLib.PRIORITY_DEFAULT, null, (f, result) => {
             try {
-                const [, , stderr] = p.communicate_utf8_finish(res);
-                if (!p.get_successful())
-                    throw new Error(stderr.trim() || 'write failed');
+                const stream = f.open_readwrite_finish(result);
+                stream.get_output_stream().write_all(new TextEncoder().encode(enabled ? '1' : '0'), null);
+                stream.close(null);
             } catch (e) {
-                Main.notifyError('Could not change the battery charge limit', e.message);
+                const denied = e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.PERMISSION_DENIED);
+                Main.notifyError('Could not change the battery charge limit', denied
+                    ? 'The setting is only writable by root. See "Charge limit permissions" on the extension\'s GitHub page.'
+                    : e.message);
             }
             this._writing = false;
             if (!this._destroyed)
@@ -1177,6 +1229,7 @@ export class LaptopMonitor {
             GLib.source_remove(this._claudeTimerId);
         this._settings.disconnect(this._settingsId);
         this._settings.disconnect(this._groupsId);
+        this._settings.disconnect(this._claudeId);
         this._claude.destroy();
         this._button.destroy();
     }

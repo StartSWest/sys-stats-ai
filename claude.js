@@ -6,8 +6,6 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
-Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
-
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CREDENTIALS = GLib.build_filenamev([GLib.get_home_dir(), '.claude', '.credentials.json']);
 const decoder = new TextDecoder();
@@ -77,12 +75,24 @@ export class ClaudeUsage {
         return oauth.accessToken;
     }
 
+    _send(msg) {
+        return new Promise((resolve, reject) => {
+            this._http.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, this._cancellable, (session, result) => {
+                try {
+                    resolve(session.send_and_read_finish(result));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }
+
     async refresh() {
         try {
             const msg = Soup.Message.new('GET', USAGE_URL);
             msg.request_headers.append('Authorization', `Bearer ${this._readToken()}`);
             msg.request_headers.append('anthropic-beta', 'oauth-2025-04-20');
-            const bytes = await this._http.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, this._cancellable);
+            const bytes = await this._send(msg);
             const status = msg.get_status();
             if (status === 401)
                 throw new Error('Login expired. Run claude to renew it');
@@ -96,6 +106,15 @@ export class ClaudeUsage {
             this.error = e.message;
         }
         this.updatedAt = Date.now();
+    }
+
+    // Stop any request in flight and forget the last result.
+    cancel() {
+        this._cancellable.cancel();
+        this._cancellable = new Gio.Cancellable();
+        this.limits = null;
+        this.error = null;
+        this.updatedAt = 0;
     }
 
     destroy() {

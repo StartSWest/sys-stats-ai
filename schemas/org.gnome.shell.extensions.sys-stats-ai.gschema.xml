@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.laptop-monitor" path="/org/gnome/shell/extensions/laptop-monitor/">
+  <schema id="org.gnome.shell.extensions.sys-stats-ai" path="/org/gnome/shell/extensions/sys-stats-ai/">
     <key name="panel-items" type="as">
       <default>['cpu', 'gpu', 'memory', 'battery', 'claude']</default>
       <summary>Items shown in the top bar</summary>
@@ -10,6 +10,11 @@
       <default>['details', 'topbar']</default>
       <summary>Collapsed menu groups</summary>
       <description>Any of: overview, claude, details, topbar.</description>
+    </key>
+    <key name="claude-enabled" type="b">
+      <default>false</default>
+      <summary>Show Claude plan usage</summary>
+      <description>When on, reads the Claude Code login in ~/.claude/.credentials.json and asks api.anthropic.com for the plan's usage limits every 2 minutes.</description>
     </key>
   </schema>
 </schemalist>

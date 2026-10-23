@@ -1,100 +1,106 @@
-# Laptop Monitor
+# Sys Stats AI
 
-A GNOME Shell extension (GNOME 48–50) that puts CPU, GPU, memory, temperature,
-battery and **Claude plan usage** in the top bar, with a popup of gauges, graphs
-and details.
+A GNOME Shell extension (GNOME 48–50) that shows system stats in the top bar,
+with live gauges and graphs, plus your **Claude plan usage limits**.
 
 <p>
-  <img src="screenshots/menu.png" width="360" alt="Menu with gauges, Claude usage and activity graph">
-  <img src="screenshots/collapsed.png" width="360" alt="Menu with every group collapsed into summaries">
+  <img src="screenshots/menu.png" width="360" alt="Menu with gauges, CPU threads, activity graph and the Claude opt-in">
+  <img src="screenshots/claude.png" width="360" alt="Claude 5-hour session and weekly limits with reset times; other groups collapsed into summaries">
 </p>
 
-## Features
+## What it shows
 
-- **Top bar** — icons with live values for CPU (with a mini graph), GPU,
-  memory, temperature, battery and Claude usage (`session · weekly`). Values turn
-  amber/red when high. Pick what shows under *Show in top bar*.
+**Top bar:** icons with live values for any of CPU (with a mini graph), GPU,
+memory, temperature, battery and Claude usage (`session · weekly`). Values turn
+amber or red when high. Pick what appears under *Show in top bar*.
+
+**Menu**, in collapsible groups:
+
 - **Overview**
-  - Gauges for CPU, GPU, temperature, memory, GPU memory and battery. The arc
-    shades towards amber/red as it climbs, the track marks where "high" starts,
-    and a tick shows the peak of the last 3 minutes.
-  - One heat-coloured bar per CPU thread, with the average marked.
+  - Gauges for CPU (with clock), GPU (with clock), temperature, memory, GPU
+    memory and battery (with power draw). Each arc shades towards amber and red
+    as it climbs, the track marks where "high" starts, and a tick marks the
+    peak of the last 3 minutes.
+  - One heat-coloured bar per CPU thread, with the average marked and
+    `avg · max` shown.
   - A smoothed 3-minute graph of CPU, GPU and memory with their current values.
-- **Claude plan usage** — 5-hour session and weekly limits with reset times,
-  refreshed every 2 minutes.
-- **Details** — load average, swap, GPU memory split (VRAM / shared), GPU clock,
-  battery power, time left, drain since unplugged and battery health.
-- **Collapsible groups** — each group collapses to a one-line summary; the menu
-  scrolls when it is taller than the screen. Collapsed groups are remembered.
-- **Charge limit switch** — toggles Lenovo IdeaPad *conservation mode* (stops
-  charging at ~80%).
+- **Claude plan usage** (optional, off by default): your **5-hour session** and
+  **weekly** usage limits, plus any per-model weekly limit, each with its reset
+  time (`resets in 2 h 32 min · 04:49`), refreshed every 2 minutes.
+- **Details:** load average, swap, GPU memory split (VRAM / shared), GPU clock,
+  temperature and chip power, battery power, time left or time to full, drain
+  since unplugged, and battery health and cycles.
+- **Show in top bar:** tick the items you want in the top bar.
 
-## Requirements and what it reads
+A collapsed group shows a one-line summary in its header (mini rings, mini bars
+or text). The menu scrolls when it is taller than the screen. Your choices are
+remembered.
+
+On Lenovo IdeaPad laptops, a **Limit charge to ~80%** switch toggles battery
+conservation mode.
+
+## Install
+
+From [extensions.gnome.org](https://extensions.gnome.org/) once it is approved:
+search for **Sys Stats AI**, or use the Extension Manager app.
+
+From source:
+
+```sh
+git clone https://github.com/StartSWest/sys-stats-ai
+cd sys-stats-ai
+./pack.sh
+gnome-extensions install --force dist/sys-stats-ai@startswest.github.io.shell-extension.zip
+```
+
+Log out and back in, then `gnome-extensions enable sys-stats-ai@startswest.github.io`.
+
+## What it reads
 
 | Data | Source |
 |---|---|
 | CPU, memory, swap | `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, cpufreq |
 | CPU temperature | hwmon `k10temp`, `coretemp` or `zenpower` |
-| GPU | `amdgpu` sysfs (`gpu_busy_percent`, `mem_info_*`, hwmon) — AMD GPUs only |
+| GPU | `amdgpu` sysfs (`gpu_busy_percent`, `mem_info_*`, hwmon); AMD GPUs only |
 | Battery | `/sys/class/power_supply` |
-| Charge limit | `ideapad_acpi` `conservation_mode` — Lenovo IdeaPad only |
-| Claude usage | `~/.claude/.credentials.json` (written by [Claude Code](https://claude.com/claude-code)) |
+| Charge limit | `ideapad_acpi` `conservation_mode`; Lenovo IdeaPad only |
+| Claude usage | `~/.claude/.credentials.json`, written by [Claude Code](https://claude.com/claude-code); only when turned on |
 
 Sections whose hardware is missing are hidden.
 
 ### Claude usage and your login
 
-The Claude section reads the OAuth token that Claude Code stores in
+Claude usage is off until you press **Turn on Claude usage** in the menu. When
+on, the extension reads the OAuth token that Claude Code saves in
 `~/.claude/.credentials.json` and calls `https://api.anthropic.com/api/oauth/usage`
 (the endpoint behind Claude Code's `/usage`) every 2 minutes. The token is only
-read and sent to `api.anthropic.com`; it is never refreshed, stored or sent
-anywhere else. If the login expires, run `claude` once to renew it. This
+read and sent to `api.anthropic.com`. It is never refreshed, stored or sent
+anywhere else. If the login expires, run `claude` once to renew it. The
 endpoint is not a documented public API and may change.
 
 ### Charge limit permissions
 
-The sysfs file is root-only by default. `contrib/battery-conservation.service`
-turns conservation mode on at boot and makes the file writable by the `sudo`
-group, so the switch works without a password:
+The conservation-mode file is root-only by default.
+`contrib/battery-conservation.service` turns conservation mode on at boot and
+makes the file writable by the `sudo` group, so the switch works without a
+password:
 
 ```sh
 sudo cp contrib/battery-conservation.service /etc/systemd/system/
 sudo systemctl enable --now battery-conservation.service
 ```
 
-## Install
-
-```sh
-git clone https://github.com/StartSWest/gnome-laptop-monitor \
-  ~/.local/share/gnome-shell/extensions/laptop-monitor@ivanc.local
-cd ~/.local/share/gnome-shell/extensions/laptop-monitor@ivanc.local
-glib-compile-schemas schemas
-```
-
-Log out and back in (Wayland), then:
-
-```sh
-gnome-extensions enable laptop-monitor@ivanc.local
-```
-
 ## Development
 
-GNOME Shell caches an extension's `extension.js` for the whole login session.
-Here `extension.js` is only a small loader that re-imports `stats.js`,
-`claude.js` and `widget.js` with a fresh URL every time the extension is
-enabled, so after editing those files
-
-```sh
-gnome-extensions disable laptop-monitor@ivanc.local
-gnome-extensions enable laptop-monitor@ivanc.local
-```
-
-loads the new code without logging out. Because of this, `widget.js` must not
-use `GObject.registerClass` (a GType name can only be registered once per
-session). Changing `metadata.json`'s `version` still needs a logout.
-
-`stats.js` and `claude.js` only depend on GLib/Gio/Soup and can be run with
-`gjs -m` outside the shell.
+- `./pack.sh` builds the zip for extensions.gnome.org in `dist/`.
+- `stats.js` and `claude.js` only depend on GLib, Gio and Soup and run under
+  `gjs -m` outside the shell.
+- To try UI changes without touching your session, run a separate headless
+  shell. Set `XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME` and `XDG_DATA_HOME` to scratch
+  directories *before* `dbus-run-session`, so its settings stay separate from
+  yours. Then run
+  `gnome-shell --headless --wayland --virtual-monitor 1536x960` and take
+  screenshots over D-Bus.
 
 ## License
 
