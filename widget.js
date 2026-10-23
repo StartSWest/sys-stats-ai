@@ -176,7 +176,11 @@ class Gauge {
         });
         this._area = new St.DrawingArea({x_expand: true, y_expand: true});
         this._area.connect('repaint', a => this._draw(a));
-        this._area.connect('destroy', () => this._timeline?.stop());
+        this._area.connect('notify::mapped', () => this._syncPulse());
+        this._area.connect('destroy', () => {
+            this._timeline?.stop();
+            this._pulse?.stop();
+        });
         dial.add_child(this._area);
         this._value = label('…', 'lm-gauge-value', {
             x_expand: true,
@@ -185,15 +189,50 @@ class Gauge {
             y_align: Clutter.ActorAlign.CENTER,
         });
         dial.add_child(this._value);
-        dial.add_child(label(title, 'lm-gauge-title', {
+        this._title = label(title, 'lm-gauge-title', {
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.END,
-        }));
+        });
+        dial.add_child(this._title);
         this.actor.add_child(dial);
         this._detail = label('', 'lm-gauge-detail', {x_align: Clutter.ActorAlign.CENTER});
         this.actor.add_child(this._detail);
+        this._charging = false;
+        this._phase = 0;
+    }
+
+    setTitle(text, charging = false) {
+        this._title.text = text;
+        this._title[charging ? 'add_style_class_name' : 'remove_style_class_name']('lm-charging');
+    }
+
+    // While charging, a light runs along the arc towards the knob and the
+    // knob's halo pulses.
+    setCharging(charging) {
+        if (charging === this._charging)
+            return;
+        this._charging = charging;
+        this._syncPulse();
+        this._area.queue_repaint();
+    }
+
+    // Animate only while the gauge is on screen, so a closed menu costs nothing.
+    _syncPulse() {
+        const run = this._charging && this._area.mapped;
+        if (run && !this._pulse) {
+            this._pulse = new Clutter.Timeline({actor: this._area, duration: 2200, repeat_count: -1});
+            this._pulse.connect('new-frame', timeline => {
+                this._phase = timeline.get_progress();
+                this._area.queue_repaint();
+            });
+            this._pulse.start();
+        } else if (!run && this._pulse) {
+            this._pulse.stop();
+            this._pulse = null;
+            this._phase = 0;
+        }
     }
 
     _fraction(value) {
@@ -333,14 +372,36 @@ class Gauge {
                 cr.stroke();
             }
 
-            // Knob at the end of the arc, with a halo.
+            // Charging: a light runs from the start of the arc to the knob, then
+            // fades out before the next pass.
+            const run = Math.min(1, this._phase / 0.75);
+            if (this._charging && t > 0.004) {
+                const head = t * run;
+                const tail = Math.max(0, head - Math.max(0.06, t * 0.5));
+                const fade = this._phase < 0.75 ? 1 : 1 - (this._phase - 0.75) / 0.25;
+                const steps = 16;
+                cr.setLineCap(Cairo.LineCap.BUTT);
+                for (const [width, peak] of [[15, 0.3], [8, 0.95]]) {
+                    cr.setLineWidth(width);
+                    for (let i = 0; i < steps; i++) {
+                        cr.setSourceRGBA(1, 1, 1, peak * fade * ((i + 1) / steps) ** 1.6);
+                        cr.arc(cx, cy, r, angle(tail + (head - tail) * i / steps),
+                            angle(tail + (head - tail) * (i + 1) / steps));
+                        cr.stroke();
+                    }
+                }
+            }
+
+            // Knob at the end of the arc, with a halo that swells as the light
+            // arrives while charging.
             const [kx, ky] = at(t, r);
             const knob = this._colorAt(t);
-            const halo = new Cairo.RadialGradient(kx, ky, 0, kx, ky, 12);
-            halo.addColorStopRGBA(0, ...knob, 0.55);
+            const haloR = this._charging ? 11 + 6 * Math.sin(Math.PI * clamp((this._phase - 0.6) / 0.4)) : 12;
+            const halo = new Cairo.RadialGradient(kx, ky, 0, kx, ky, haloR);
+            halo.addColorStopRGBA(0, ...knob, this._charging ? 0.75 : 0.55);
             halo.addColorStopRGBA(1, ...knob, 0);
             cr.setSource(halo);
-            cr.arc(kx, ky, 12, 0, 2 * Math.PI);
+            cr.arc(kx, ky, haloR, 0, 2 * Math.PI);
             cr.fill();
             cr.setSourceRGBA(...knob, 1);
             cr.arc(kx, ky, 6, 0, 2 * Math.PI);
@@ -1094,22 +1155,31 @@ export class LaptopMonitor {
         this._batteryIcon.icon_name = batteryIconName(bat);
         this._setPanel('battery', `${bat.capacity}%`, batLevel);
 
-        let power, time;
+        const charging = bat.status === 'Charging';
+        let power, time, detail;
         if (discharging) {
             power = `−${watts.toFixed(1)} W`;
             const hours = watts > 0.5 ? bat.energyNow / watts : null;
             time = hours !== null ? `≈ ${fmtDuration(hours * 60)} left` : '—';
-        } else if (bat.status === 'Charging') {
+            detail = power;
+        } else if (charging) {
             power = `+${watts.toFixed(1)} W`;
             const target = bat.energyFull * (chargeLimit ? 0.8 : 1);
             const hours = watts > 0.5 && target > bat.energyNow ? (target - bat.energyNow) / watts : null;
             time = hours !== null ? `≈ ${fmtDuration(hours * 60)} to ${chargeLimit ? '~80%' : 'full'}` : '—';
+            detail = hours !== null ? `${power} · ${fmtDuration(hours * 60).replace(' min', ' m')}` : power;
         } else {
             power = bat.acOnline ? 'Plugged in' : `${watts.toFixed(1)} W`;
             time = chargeLimit && bat.acOnline ? 'Holding at charge limit' : '—';
+            detail = chargeLimit && bat.acOnline ? 'holding at ~80%' : power;
         }
-        this._gauges.battery.set(bat.capacity, `${bat.capacity}%`, power, batLevel);
+        const gauge = this._gauges.battery;
+        gauge.set(bat.capacity, `${bat.capacity}%`, detail, batLevel);
+        gauge.setCharging(charging);
+        gauge.setTitle(charging ? 'Charging' : bat.acOnline ? 'Plugged in' : 'Battery', charging);
         this._setChip('battery', bat.capacity / 100, `${bat.capacity}%`, batLevel);
+        for (const value of [this._panel.battery.value, this._chips.battery.value])
+            value[charging ? 'add_style_class_name' : 'remove_style_class_name']('lm-charging');
         this._tiles.power.text = discharging || bat.status === 'Charging'
             ? `${power} · ${bat.status.toLowerCase()}`
             : power;
